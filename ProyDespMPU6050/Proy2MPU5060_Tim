@@ -1,0 +1,102 @@
+#include <Wire.h>
+#include <Ticker.h>  // Librería para temporizadores en ESP8266
+
+const int MPU6050_ADDR = 0x68;    // Dirección I2C del MPU6050
+const int ACCEL_XOUT_H = 0x3B;    // Registro de datos del acelerómetro en X (byte alto)
+const int GYRO_XOUT_H = 0x43;     // Registro de datos del giroscopio en X (byte alto)
+const int PWR_MGMT_1 = 0x6B;      // Registro de gestión de energía
+
+volatile int32_t accelX_sum = 0, accelY_sum = 0, accelZ_sum = 0;
+volatile int32_t gyroX_sum = 0, gyroY_sum = 0, gyroZ_sum = 0;
+volatile int count = 0;           // Contador de mediciones
+volatile bool ready = false;      // Indica si hay un promedio listo
+Ticker timer;                     // Temporizador para interrupciones
+
+int16_t accelX, accelY, accelZ;
+int16_t gyroX, gyroY, gyroZ;
+
+void setup() {
+  Wire.begin(D2, D1);  // Inicializar I2C (D2=SDA, D1=SCL para NodeMCU)
+  Serial.begin(115200);  // Inicializar comunicación serial
+
+  // Despertar el MPU6050 (por defecto está en modo sleep)
+  Wire.beginTransmission(MPU6050_ADDR);
+  Wire.write(PWR_MGMT_1);  // Accede al registro de gestión de energía
+  Wire.write(0);           // Despierta el sensor
+  Wire.endTransmission(true);
+
+  // Configurar temporizador para ejecutar cada 10 ms
+  timer.attach_ms(10, readMPU6050);  // Ejecuta la función readMPU6050 cada 10 ms
+}
+
+void loop() {
+  if (ready) {
+    // Calcular el promedio de giroscopio
+    float avg_gX = ((gyroX-gyroX_sum) / 100.0) / 131.0; // Conversión a °/s
+    float avg_gY = ((gyroY-gyroY_sum) / 100.0) / 131.0;
+    float avg_gZ = ((gyroZ-gyroZ_sum) / 100.0) / 131.0;
+
+    // Calcular el promedio de acelerómetro
+    float avg_aX = ((accelX-accelX_sum) / 100.0) / 16384.0; // Conversión a g
+    float avg_aY = ((accelY-accelY_sum) / 100.0) / 16384.0;
+    float avg_aZ = ((16384.0-accelZ_sum) / 100.0) / 16384.0;
+
+    // Mostrar los resultados
+    Serial.print("Promedio Giroscopio -> X: ");
+    Serial.print(avg_gX);
+    Serial.print(" °/s, Y: ");
+    Serial.print(avg_gY);
+    Serial.print(" °/s, Z: ");
+    Serial.print(avg_gZ);
+    Serial.println(" °/s");
+
+    Serial.print("Promedio Acelerómetro -> X: ");
+    Serial.print(avg_aX*9.8);
+    Serial.print(" m/s2, Y: ");
+    Serial.print(avg_aY*9.8);
+    Serial.print(" m/s2, Z: ");
+    Serial.print(avg_aZ*9.8);
+    Serial.println(" m/s2");
+
+    // Resetear variables para la próxima medición
+    accelX_sum = 0; accelY_sum = 0; accelZ_sum = 0;
+    gyroX_sum = 0; gyroY_sum = 0; gyroZ_sum = 0;
+    count = 0;
+    ready = false;  // Listo para el siguiente conjunto de mediciones
+
+    // Reiniciar el temporizador
+    timer.attach_ms(10, readMPU6050);
+  }
+}
+
+void readMPU6050() {
+  if (count < 100) {
+
+    // Leer los valores de acelerómetro y giroscopio
+    Wire.beginTransmission(MPU6050_ADDR);
+    Wire.write(ACCEL_XOUT_H);  // Empieza desde el registro del acelerómetro
+    Wire.endTransmission(false);
+    Wire.requestFrom(MPU6050_ADDR, 14, true);  // Lee 14 bytes (6 de acelerómetro, 2 de temperatura, 6 de giroscopio)
+
+    accelX = (Wire.read() << 8 | Wire.read()); // Acelerómetro X
+    accelY = (Wire.read() << 8 | Wire.read()); // Acelerómetro Y
+    accelZ = (Wire.read() << 8 | Wire.read()); // Acelerómetro Z
+    Wire.read(); Wire.read();  // Ignorar datos de temperatura
+    gyroX = (Wire.read() << 8 | Wire.read());  // Giroscopio X
+    gyroY = (Wire.read() << 8 | Wire.read());  // Giroscopio Y
+    gyroZ = (Wire.read() << 8 | Wire.read());  // Giroscopio Z
+
+    // Acumular los valores
+    accelX_sum += accelX;
+    accelY_sum += accelY;
+    accelZ_sum += accelZ;
+    gyroX_sum += gyroX;
+    gyroY_sum += gyroY;
+    gyroZ_sum += gyroZ;
+
+    count++;
+  } else {
+    ready = true;  // Promedio listo
+    timer.detach();  // Detener el temporizador temporalmente
+  }
+}
